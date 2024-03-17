@@ -1,5 +1,6 @@
+import numpy as np
 import MDAnalysis as mda
-from ArrayPlus import PBC, CoordinatesMaybeWithPBC
+from .ArrayPlus import PBC, CoordinatesMaybeWithPBC
 
 
 def align_z(v):
