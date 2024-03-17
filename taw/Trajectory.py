@@ -1,4 +1,5 @@
 import MDAnalysis as mda
+from ArrayPlus import PBC, CoordinatesMaybeWithPBC
 
 
 def align_z(v):
