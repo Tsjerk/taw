@@ -1,0 +1,20 @@
+[project]
+name = "taw"
+version = "0.0.1"
+authors = [
+  { name="Tsjerk A. Wassenaar", email="tsjerkw@gmail.com" },
+]
+description = "Trajectory Analysis Workbench"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache 2.0 License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/Tsjerk/taw/"
+Issues = "https://github.com/Tsjerk/taw/issues"
+
+
