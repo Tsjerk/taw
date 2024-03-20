@@ -1,5 +1,7 @@
 import numpy as np
 import MDAnalysis as mda
+import struct
+import molly
 from .ArrayPlus import PBC, CoordinatesMaybeWithPBC
 
 
@@ -76,6 +78,8 @@ class Trajectory(CoordinatesMaybeWithPBC):
     property .atoms
     '''
     _attributes = (
+        'topfile', # The file from which the topology is read
+        'trjfile', # The file from which the trajectory is read
         'atoms', # The atomgroup
         'times', # The times of the frames
         'pbc', # The PBC lattice matrices for all frames
@@ -85,11 +89,17 @@ class Trajectory(CoordinatesMaybeWithPBC):
         'rmsd_' # Root mean square deviation (set by align)
     )
     
-    def __new__(cls, top: str, trj: str, selection=None, start=None, stop=None, step=None):
+    def __new__(cls, top: str, trj: str, selection=None, frames=None):
 
+        if trj and trj.endswith(('xtc', 'XTC')):
+            # return the XTC version instead
+            return XTCTrajectory(top, trj, selection, frames)
+        
         # Bookkeeping: MDA stuff
         atomgroup = mda.Universe(top, trj).atoms
-        trajectory = atomgroup.universe.trajectory[start:stop:step]
+        trajectory = atomgroup.universe.trajectory        
+        if frames is not None:
+            trajectory = trajectory[frames]
         if selection:
             atomgroup = atomgroup.universe.select_atoms(selection)
         natoms = len(atomgroup)
@@ -112,6 +122,8 @@ class Trajectory(CoordinatesMaybeWithPBC):
         trj.atoms = Atoms(atomgroup)
         trj.centers = np.zeros((len(trj), 3))
         trj.orientations = np.outer(np.ones(len(trj)), np.eye(3)).reshape((-1, 3, 3))
+        trj.topfile = top
+        trj.trjfile = trj
                 
         return trj
        
@@ -211,5 +223,55 @@ class Trajectory(CoordinatesMaybeWithPBC):
     def split(self, what):
         '''Split the trajectory according to mda.atomgroup.split'''
         return [ self[ag] for ag in self.atoms.split(what) ]
+
+
+class XTCTrajectory(Trajectory):
+    '''
+    The XTC Trajectory class derives from the Trajectory, but
+    reads in its coordinates efficiently using `molly`.
+    '''
+    
+    def __new__(cls, top: str, trj: str, selection=None, frames=None):
+
+        # Bookkeeping: MDA stuff
+        atomgroup = mda.Universe(top, trj).atoms
+        if selection:
+            atomgroup = atomgroup.universe.select_atoms(selection)
+        natoms = len(atomgroup)
+
+        # Indexing XTC trajectory
+        with open(trj, 'rb') as xtc:
+            filesize = xtc.seek(0, 2)
+            positions = [ xtc.seek(0) ]
+            while positions[-1] < filesize:
+                xtc.seek(88, 1)
+                framesize = struct.unpack('>l', xtc.read(4))[0]
+                framesize += -framesize % 4
+                positions.append(xtc.seek(framesize, 1))
+        positions = np.array(positions[:-1])
+
+        if frames is not None:
+            positions = positions[frames]
+
+        # Allocating memory
+        pos = np.empty((len(positions), natoms, 3), dtype=np.float32)
+        pbc = np.empty((len(positions), 3, 3), dtype=np.float32)
+        times = np.empty(len(positions))
+            
+        # Content: times, pbc, coordinates
+        X = molly.XTCReader(trj)
+        X.read_into_array(pos, pbc, frames, atomgroup.ix.tolist())
+            
+        # The object
+        trj = pos.view(cls)
+        trj.pbc = PBC(pbc)
+        trj.times = None # Molly no read times... 
+        trj.atoms = Atoms(atomgroup)
+        trj.centers = np.zeros((len(trj), 3))
+        trj.orientations = np.outer(np.ones(len(trj)), np.eye(3)).reshape((-1, 3, 3))
+        trj.topfile = top
+        trj.trjfile = trj
+                
+        return trj
 
 
