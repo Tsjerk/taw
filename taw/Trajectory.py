@@ -104,26 +104,21 @@ class Trajectory(CoordinatesMaybeWithPBC):
             atomgroup = atomgroup.universe.select_atoms(selection)
         natoms = len(atomgroup)
         
-        # Allocating memory
-        trj = np.empty((len(trajectory), natoms, 3))
-        pbc = np.empty((len(trajectory), 6))
-        times = np.empty(len(trajectory))
-            
-        # Content: times, pbc, coordinates
-        for fidx, frame in enumerate(trajectory):
-            trj[fidx] = atomgroup.positions.copy()
-            pbc[fidx] = atomgroup.dimensions.copy()
-            times[fidx] = frame.time
-
-        # The object
-        trj = trj.view(cls)
-        trj.pbc = PBC(pbc)
-        trj.times = times
+        # Setting up trajectory object
+        trj = np.empty((len(trajectory), natoms, 3)).view(cls)
+        trj.pbc = np.empty((len(trajectory), 6))
+        trj.times = np.empty(len(trajectory))
         trj.atoms = Atoms(atomgroup)
         trj.centers = np.zeros((len(trj), 3))
         trj.orientations = np.outer(np.ones(len(trj)), np.eye(3)).reshape((-1, 3, 3))
         trj.topfile = top
         trj.trjfile = trj
+            
+        # Content: times, pbc, coordinates
+        for fidx, frame in enumerate(trajectory):
+            trj[fidx] = atomgroup.positions.copy()
+            trj.pbc[fidx] = atomgroup.dimensions.copy()
+            trj.times[fidx] = frame.time
                 
         return trj
        
@@ -253,25 +248,20 @@ class XTCTrajectory(Trajectory):
         if frames is not None:
             positions = positions[frames]
 
-        # Allocating memory
-        pos = np.empty((len(positions), natoms, 3), dtype=np.float32)
-        pbc = np.empty((len(positions), 3, 3), dtype=np.float32)
-        times = np.empty(len(positions))
+        # Allocating memory, setting up structure
+        xtc = np.empty((len(positions), natoms, 3), dtype=np.float32).view(cls)
+        xtc.pbc = np.empty((len(positions), 3, 3), dtype=np.float32)
+        xtc.times = np.empty(len(positions), dtype=np.float32)
+        xtc.atoms = Atoms(atomgroup)
+        xtc.centers = np.zeros((len(trj), 3))
+        xtc.orientations = np.outer(np.ones(len(trj)), np.eye(3)).reshape((-1, 3, 3))
+        xtc.topfile = top
+        xtc.trjfile = trj
             
-        # Content: times, pbc, coordinates
+        # Fill content: times, pbc, coordinates
         X = molly.XTCReader(trj)
-        X.read_into_array(pos, pbc, frames, atomgroup.ix.tolist())
+        X.read_into_array(xtc, xtc.pbc, xtc.times, frames, atomgroup.ix.tolist())
             
-        # The object
-        trj = pos.view(cls)
-        trj.pbc = PBC(pbc)
-        trj.times = None # Molly no read times... 
-        trj.atoms = Atoms(atomgroup)
-        trj.centers = np.zeros((len(trj), 3))
-        trj.orientations = np.outer(np.ones(len(trj)), np.eye(3)).reshape((-1, 3, 3))
-        trj.topfile = top
-        trj.trjfile = trj
-                
-        return trj
+        return xtc
 
 
