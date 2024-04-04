@@ -136,9 +136,12 @@ class Trajectory(CoordinatesMaybeWithPBC):
             result.atoms = atoms
             return result
         result = super().__getitem__(item)
-        # A bit unfortunate - need to trim the item
-        # to have only the frames selection
-        if isinstance(result, type(self)):
+        if isinstance(item, (int, slice)):
+            result.pbc = self.pbc[item]
+        elif isinstance(result, type(self)):
+            # A bit unfortunate - need to trim the item
+            # to have only the frames selection
+            # We do neglect the case where dimensions are subset...
             result.pbc = self.pbc[item[:len(self.shape) - 2]]
         return result
         
