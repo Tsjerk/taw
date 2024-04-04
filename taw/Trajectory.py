@@ -261,7 +261,11 @@ class XTCTrajectory(Trajectory):
         # Fill content: times, pbc, coordinates
         X = molly.XTCReader(trj)
         X.read_into_array(xtc, xtc.pbc, xtc.times, frames, atomgroup.ix.tolist())
-            
+
+        # To be compatible with the Trajectory class that uses MDAnalysis we need
+        # to convert from nm to Å.
+        xtc *= 10
+        
         return xtc
 
 
