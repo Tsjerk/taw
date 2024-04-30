@@ -56,14 +56,14 @@ class Atoms(mda.AtomGroup):
             super().__init__(mda.Universe(top, trj).atoms)            
 
     def __getitem__(self, item):
-        if isinstance(item, (int, slice)):
+        if isinstance(item, (int, slice, list, np.ndarray)):
             # Slice over atoms
             ag = self.universe.atoms[item]
         elif isinstance(item, str):
             # Make a subselection using mda selection syntax
             ag = self.universe.select_atoms(item)
         elif isinstance(item, mda.AtomGroup):
-            ag = self.universe.atoms & item
+            ag = self.universe.atoms[item.ix]
         else:
             raise TypeError(f'Unknown selection type for atomgroup: {item} ({type(item)})')
         return Atoms(ag)
@@ -127,14 +127,14 @@ class Trajectory(CoordinatesMaybeWithPBC):
             # If a newaxis is required as first, then
             # simply also specify the second index
             return self
-        if isinstance(item, (str, mda.AtomGroup)):
+        if isinstance(item, (str, mda.AtomGroup, list, np.ndarray)):
             # Select a subset of atoms
             atoms = self.atoms[item]
             result = self[..., atoms.ix, :]
             result.atoms = atoms
             return result
         result = super().__getitem__(item)
-        if isinstance(item, (int, slice)):
+        if isinstance(item, (int, slice)) and len(self.shape) > 2:
             result.pbc = self.pbc[item]
         elif isinstance(result, type(self)):
             # A bit unfortunate - need to trim the item
