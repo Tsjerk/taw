@@ -198,14 +198,16 @@ class Trajectory(CoordinatesMaybeWithPBC):
         if selection is None:
             selection = 'all'
         # Use box coordinate angles to unambiguously define center of mass
-        angles = self[selection].A
+        # High precision advised with angles
+        angles = self[selection].A.astype('float64')
         cosa, sina = np.cos(angles), np.sin(angles)
         centers = np.arctan2(sina.mean(axis=1), cosa.mean(axis=1))
-        centers = centers[:, None] 
-        centers = centers @ (0.5 / np.pi * self.pbc)
-        self.centers = centers
-        self -= centers
-        return self
+        angles += np.pi - centers
+        angles %= 2 * np.pi
+        angles -= np.pi
+        result = angles.C.astype('float32')
+        result.centers = centers[:, None] @ (0.5 / np.pi * self.pbc)
+        return result
 
     def center(self, selection=None):
         '''Center the selection in the center of the triclinic cell (PBC safe'''
