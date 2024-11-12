@@ -199,10 +199,11 @@ class Trajectory(CoordinatesMaybeWithPBC):
             selection = 'all'
         # Use box coordinate angles to unambiguously define center of mass
         # High precision advised with angles
-        angles = self[selection].A.astype('float64')
+        angles = self[selection].A.astype('float64') % (2 * np.pi)
+        print('bla')
         cosa, sina = np.cos(angles), np.sin(angles)
         centers = np.arctan2(sina.mean(axis=1), cosa.mean(axis=1))
-        angles += np.pi - centers
+        angles += np.pi - centers[:, None]
         angles %= 2 * np.pi
         angles -= np.pi
         result = angles.C.astype('float32')

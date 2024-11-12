@@ -227,4 +227,9 @@ class CoordinatesMaybeWithPBC(NDArrayWithAttributes):
         B -= 0.5
         return B.reshape(self.shape).I
     
-
+    def dodecahedral(self):
+        # Easiest is to have a square base.
+        # If the base is hexagonal, rotate,
+        # do the stuff and rotate back.
+        # No one will notice.
+        ...
