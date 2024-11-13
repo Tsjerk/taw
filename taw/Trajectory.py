@@ -1,275 +1,387 @@
 import numpy as np
-import MDAnalysis as mda
-import struct
-import molly
-from .ArrayPlus import PBC, CoordinatesMaybeWithPBC
+from .MultiArray import MultiArray
 
 
-def align_z(v):
+class NDArrayWithAttributes(np.ndarray):
     '''
-    Generate rotation matrix aligning z-axis onto v (and vice-versa).
+    The NDArrayWithAttributes is a derivative of the NumPy ndarray
+    that lists the attributes that are to be set/copied in the
+    __array_finalize__ method. Each child should have an attribute
+    `_attributes` that lists the attributes characteristic of the
+    class
     '''
-    
-    # This routine is based on the notion that for any two
-    # vectors, the alignment is a 180 degree rotation 
-    # around the resultant vector.
-    
-    w = v / (v ** 2).sum() ** 0.5
-    
-    if w[2] <= 1e-8 - 1:
-        return -np.eye(3) # Mind the inversion ...
+    _attributes = ()
 
-    w[2] += 1
+    def __new__(cls, *args, **kwargs):
+        return np.ndarray(*args, **kwargs).view(cls)
     
-    return (2 / (w**2).sum()) * w * w[:, None] - np.eye(3)
+    def __array_finalize__(self, obj):
+        if obj is None:
+            return
+        for attr in self._attributes:
+            setattr(self, attr, getattr(obj, attr, None))
 
 
-class Atoms(mda.AtomGroup):
+class PositionArray(np.ndarray):
+    '''This is an alias for the regular np.ndarray'''
+    def __new__(cls, *args, **kwargs):
+        return np.ndarray(*args, **kwargs).view(cls)
+
+
+class VectorArray(np.ndarray):
+    '''A VectorArray is a subclass of np.ndarray that remains invariant under addition and subtraction. 
+    Operations that would typically modify the array instead return a copy or the original array, 
+    preserving the original data.'''
+
+    def __new__(cls, *args, **kwargs):
+        return np.ndarray(*args, **kwargs).view(cls)
+
+    def __add__(self, other):
+        '''Return a copy of the VectorArray.
+
+        The addition operation for VectorArray is overridden to return an unchanged copy 
+        of the original array, making the array invariant to additions.
+
+        Args:
+            other: The value to "add" to the array, which is ignored.
+
+        Returns:
+            VectorArray: A copy of the array.
+        '''
+        return self.copy()
+    
+    def __iadd__(self, other):
+        '''Return the VectorArray itself without modification.
+
+        The in-place addition operation (+=) is overridden to have no effect 
+        on the array, preserving its original state.
+
+        Args:
+            other: The value to "add" to the array in-place, which is ignored.
+
+        Returns:
+            VectorArray: The original array, unchanged.
+        '''
+        return self
+    
+    def __sub__(self, other):
+        '''Return a copy of the VectorArray.
+
+        The subtraction operation for VectorArray is overridden to return an unchanged copy 
+        of the original array, making the array invariant to subtractions.
+
+        Args:
+            other: The value to "subtract" from the array, which is ignored.
+
+        Returns:
+            VectorArray: A copy of the array.
+        '''
+        return self.copy()
+
+    def __isub__(self, other):
+        '''Return the VectorArray itself without modification.
+
+        The in-place subtraction operation (-=) is overridden to have no effect 
+        on the array, preserving its original state.
+
+        Args:
+            other: The value to "subtract" from the array in-place, which is ignored.
+
+        Returns:
+            VectorArray: The original array, unchanged.
+        '''
+        return self
+
+
+class PBC(VectorArray):
     '''
-    This is a wrapper around the MDAnalysis atomgroup that
-    updates its atoms when making selections, such that the
-    indices are always identical between the atomgroup and
-    the corresponding coordinates.
-    
-    The indices can be used to make a selection from the
-    original coordinates. This means that a selection of
-    type int, slice, string or atomgroup 
+    The PBC class contains an ndarray of which the last two axes
+    have shape k by k, and contain a k-dimensional lattice. The
+    PBC class implements properties to give access to the lattice, 
+    the inverse and the transformation to angles. The latter will 
+    always contain their own inverses for the reverse transformation.
     '''
-    def __init__(self, top, trj=None):
+    def __new__(cls, pbc):
+        if pbc.shape[-1] == 6:
+            return cls.dim2pbc(pbc)
+        return pbc.view(cls)
         
-        if isinstance(top, mda.AtomGroup):
-            # Make a new universe from the atomgroup to
-            # ensure correspondence with selected coordinates
-            super().__init__(mda.Merge(top).atoms)
-            # Retain the indices to the parent
-            self._ix = top._ix
-        
-        elif isinstance(top, mda.Universe):
-            super().__init__(top.atoms)
-            
-        elif trj is None and isinstance(top, str) and top.lower().endswith('tpr'):
-            top = mda.topology.TPRParser.TPRParser(top).parse()
-            super().__init__(mda.Universe(top).atoms)
-            
-        else:
-            # Similar to the usual opening of a trajectory
-            super().__init__(mda.Universe(top, trj).atoms)            
+    @classmethod
+    def dim2pbc(self, arr: np.ndarray) -> np.ndarray:
+        '''
+        Convert unit cell definition from PDB CRYST1 format to lattice definition.
+        '''
+        lengths = arr[..., :3].reshape((-1, 3))
+        angles = arr[..., 3:].reshape((-1, 3)) * (np.pi / 180)
 
-    def __getitem__(self, item):
-        if isinstance(item, (int, slice, list, np.ndarray)):
-            # Slice over atoms
-            ag = self.universe.atoms[item]
-        elif isinstance(item, str):
-            # Make a subselection using mda selection syntax
-            ag = self.universe.select_atoms(item)
-        elif isinstance(item, mda.AtomGroup):
-            ag = self.universe.atoms[item.ix]
-        else:
-            raise TypeError(f'Unknown selection type for atomgroup: {item} ({type(item)})')
-        return Atoms(ag)
+        cosa = np.cos(angles)
+        sing = np.sin(angles[:, 2])
+
+        pbc = np.zeros((len(arr), 9))
+        pbc[:, 0] = lengths[:, 0]
+        pbc[:, 3] = lengths[:, 1] * cosa[:, 2]
+        pbc[:, 4] = lengths[:, 1] * sing
+        pbc[:, 6] = lengths[:, 2] * cosa[:, 1]
+        pbc[:, 7] = lengths[:, 2] * (cosa[:, 0] - cosa[:, 1] * cosa[:, 2]) / sing
+        pbc[:, 8] = (lengths[:, 2] ** 2 - (pbc[:, 6:8] ** 2).sum(axis=1)) ** 0.5
+
+        return pbc.reshape((*arr.shape[:-1], 3, 3)).view(self.__class__)
+    
+    def reduce(self):
+        '''Perform lattice reduction'''
+        ...
 
 
-class Trajectory(CoordinatesMaybeWithPBC):
+class old_PBC(NDArrayWithAttributes):
     '''
-    The Trajectory class is a derivate of the CoordinatesMaybeWithPBC
-    that includes the atoms metadata, through an Atoms class
-    property .atoms
+    The PBC class contains an ndarray of which the last two axes
+    have shape k by k, and contain a k-dimensional lattice. The
+    PBC class may contain its own inverse and implements 
+    properties to give access to the lattice, the inverse and
+    the transformation to angles. The latter will always contain
+    their own inverses for the reverse transformation.
     '''
+    
     _attributes = (
-        'topfile', # The file from which the topology is read
-        'trjfile', # The file from which the trajectory is read
-        'atoms', # The atomgroup
-        'times', # The times of the frames
-        'pbc', # The PBC lattice matrices for all frames
-        'centers', # The centers 
-        'orientations', # The orientations
-        'rgyr_' # Radii of gyration (set by align)
-        'rmsd_' # Root mean square deviation (set by align)
+        'inverse'
     )
     
-    def __new__(cls, top: str, trj: str, selection=None, frames=None):
+    def __new__(cls, pbc, inverse=None):
+        if pbc.shape[-1] == 6:
+            pbc = cls.dim2pbc(pbc)
+        pbc = pbc.view(cls)
+        pbc._inverse = inverse
+        return pbc
+        
+    @classmethod
+    def dim2pbc(self, arr: np.ndarray) -> np.ndarray:
+        '''
+        Convert unit cell definition from PDB CRYST1 format to lattice definition.
+        '''
+        lengths = arr[..., :3].reshape((-1, 3))
+        angles = arr[..., 3:].reshape((-1, 3)) * (np.pi / 180)
 
-        if trj and trj.endswith(('xtc', 'XTC')):
-            # return the XTC version instead
-            return XTCTrajectory(top, trj, selection, frames)
-        
-        # Bookkeeping: MDA stuff
-        atomgroup = mda.Universe(top, trj).atoms
-        trajectory = atomgroup.universe.trajectory        
-        if frames is not None:
-            trajectory = trajectory[frames]
-        if selection:
-            atomgroup = atomgroup.universe.select_atoms(selection)
-        natoms = len(atomgroup)
-        
-        # Setting up trajectory object
-        trj = np.empty((len(trajectory), natoms, 3)).view(cls)
-        trj.pbc = np.empty((len(trajectory), 6))
-        trj.times = np.empty(len(trajectory))
-        trj.atoms = Atoms(atomgroup)
-        trj.centers = np.zeros((len(trj), 3))
-        trj.orientations = np.outer(np.ones(len(trj)), np.eye(3)).reshape((-1, 3, 3))
-        trj.topfile = top
-        trj.trjfile = trj
-            
-        # Content: times, pbc, coordinates
-        for fidx, frame in enumerate(trajectory):
-            trj[fidx] = atomgroup.positions.copy()
-            trj.pbc[fidx] = atomgroup.dimensions.copy()
-            trj.times[fidx] = frame.time
-                
-        return trj
-       
-    def __getitem__(self, item):
-        if item is None:
-            # Override the behaviour of adding an axis
-            # to allow NoneType selections
-            # If a newaxis is required as first, then
-            # simply also specify the second index
-            return self
-        if isinstance(item, (str, mda.AtomGroup, list, np.ndarray)):
-            # Select a subset of atoms
-            atoms = self.atoms[item]
-            result = self[..., atoms.ix, :]
-            result.atoms = atoms
-            return result
-        result = super().__getitem__(item)
-        if isinstance(item, (int, slice)) and len(self.shape) > 2:
-            result.pbc = self.pbc[item]
-        elif isinstance(result, type(self)):
-            # A bit unfortunate - need to trim the item
-            # to have only the frames selection
-            # We do neglect the case where dimensions are subset...
-            result.pbc = self.pbc[item[:len(self.shape) - 2]]
-        return result
-        
-    def align(self, selection=None, reference=None, around=None):
-        '''Align the trajectory with respect to reference and selection'''
-        # PBC safe centering
-        self.origin(selection)
+        cosa = np.cos(angles)
+        sing = np.sin(angles[:, 2])
 
-        fit = self[selection].X
-        natoms = fit.shape[-2]
-        
-        if reference is None:
-            # Select first frame, also if shape is complex
-            # (multiple trajectories)
-            reference = fit.reshape((-1, natoms, fit.shape[-1]))[0]
+        pbc = np.zeros((len(arr), 9))
+        pbc[:, 0] = lengths[:, 0]
+        pbc[:, 3] = lengths[:, 1] * cosa[:, 2]
+        pbc[:, 4] = lengths[:, 1] * sing
+        pbc[:, 6] = lengths[:, 2] * cosa[:, 1]
+        pbc[:, 7] = lengths[:, 2] * (cosa[:, 0] - cosa[:, 1] * cosa[:, 2]) / sing
+        pbc[:, 8] = (lengths[:, 2] ** 2 - (pbc[:, 6:8] ** 2).sum(axis=1)) ** 0.5
 
-        # Radii of gyration (for RMSD)
-        rgyr2 = (fit ** 2).sum(axis=(-1, -2)) / natoms
-        refrg2 = (reference ** 2).sum() / natoms
-        
-        # Fitting (check for in-plane fitting (any plane))
-        if around is not None:
-            Z = align_z(np.array(around))
-            reference = reference @ Z
-            fit = fit @ Z
-            U, L, V = np.linalg.svd(reference[:, :2].T @ fit[..., :2])
-            dim = slice(None, 2)
-        else:
-            U, L, V = np.linalg.svd(reference.T @ fit)
-            dim = slice(None)
-        
-        # Rotation matrices
-        R = np.zeros_like(self.pbc)
-        R[..., dim, dim] = U @ V
-        if around is not None:
-            # Also rotate vector back from z
-            R[..., 2, 2] = 1
-            R = Z @ R @ Z.T
-        result = self @ R.transpose((0, 2, 1))
-        
-        # Bookkeeping
-        result.orientations = R
-        rmsd2 = rgyr2 + refrg2 - 2 * L.sum(axis=-1) / natoms
-        rmsd2[rmsd2 < 0] = 0
-        result.rmsd_ = rmsd2 ** 0.5
-        result.rgyr_ = rgyr2 ** 0.5
-        
-        return result
-        
-    def alignxy(self, selection=None, reference=None):
-        '''Align the trajectory with respect to reference and selection'''
-        return self.align(selection, reference, [0, 0, 1])
-        
-    def origin(self, selection=None):
-        '''Center the selection at the origin for all frames (PBC safe)'''
-        if selection is None:
-            selection = 'all'
-        # Use box coordinate angles to unambiguously define center of mass
-        # High precision advised with angles
-        angles = self[selection].A.astype('float64') % (2 * np.pi)
-        print('bla')
-        cosa, sina = np.cos(angles), np.sin(angles)
-        centers = np.arctan2(sina.mean(axis=1), cosa.mean(axis=1))
-        angles += np.pi - centers[:, None]
-        angles %= 2 * np.pi
-        angles -= np.pi
-        result = angles.C.astype('float32')
-        result.centers = centers[:, None] @ (0.5 / np.pi * self.pbc)
-        return result
-
-    def center(self, selection=None):
-        '''Center the selection in the center of the triclinic cell (PBC safe'''
-        return self.origin(selection) + 0.5 * self.pbc.sum(axis=1)[:, None]
-        
-    def molbox(self, selection):
-        # This may be expensive...
-        # Voxelized will be faster
-        ...
-        
-    def split(self, what):
-        '''Split the trajectory according to mda.atomgroup.split'''
-        return [ self[ag] for ag in self.atoms.split(what) ]
-
-
-class XTCTrajectory(Trajectory):
-    '''
-    The XTC Trajectory class derives from the Trajectory, but
-    reads in its coordinates efficiently using `molly`.
-    '''
+        return pbc.reshape((*arr.shape[:-1], 3, 3))
     
-    def __new__(cls, top: str, trj: str, selection=None, frames=None):
+    @property
+    def L(self):
+        '''Return the 'naked' lattice vectors'''
+        return self.view(np.ndarray)
+    
+    @property
+    def I(self):
+        '''Return inverse lattice (mapping to unit cube)'''
+        if self._inverse is None:
+            self._inverse = np.linalg.inv(self.L)
+        return PBC(self._inverse, self.L)
+    
+    @property
+    def A(self):
+        '''Return transformation to angles'''
+        return PBC(self.I * (2 * np.pi), self.L * (0.5 / np.pi))
+    
+    def reduce(self):
+        '''Perform lattice reduction'''
+        ...
 
-        # Bookkeeping: MDA stuff
-        atomgroup = mda.Universe(top, trj).atoms
-        if selection:
-            atomgroup = atomgroup.universe.select_atoms(selection)
-        natoms = len(atomgroup)
 
-        # Indexing XTC trajectory
-        with open(trj, 'rb') as xtc:
-            filesize = xtc.seek(0, 2)
-            positions = [ xtc.seek(0) ]
-            while positions[-1] < filesize:
-                xtc.seek(88, 1)
-                framesize = struct.unpack('>l', xtc.read(4))[0]
-                framesize += -framesize % 4
-                positions.append(xtc.seek(framesize, 1))
-        positions = np.array(positions[:-1])
-
-        if frames is not None:
-            positions = positions[frames]
-
-        # Allocating memory, setting up structure
-        xtc = np.empty((len(positions), natoms, 3), dtype=np.float32).view(cls)
-        xtc.pbc = np.empty((len(positions), 3, 3), dtype=np.float32)
-        xtc.times = np.empty(len(positions), dtype=np.float32)
-        xtc.atoms = Atoms(atomgroup)
-        xtc.centers = np.zeros((len(trj), 3))
-        xtc.orientations = np.outer(np.ones(len(trj)), np.eye(3)).reshape((-1, 3, 3))
-        xtc.topfile = top
-        xtc.trjfile = trj
-            
-        # Fill content: times, pbc, coordinates
-        X = molly.XTCReader(trj)
-        X.read_into_array(xtc, xtc.pbc, xtc.times, frames, atomgroup.ix.tolist())
-
-        # To be compatible with the Trajectory class that uses MDAnalysis we need
-        # to convert from nm to Å.
-        xtc *= 10
+class CoordinatesMaybeWithPBC(NDArrayWithAttributes):
+    '''
+    The CoordinatesMaybeWithPBC class is intended to 
+    store trajectory data that may be accompanied by 
+    the periodic boundary condition (PBC) information. 
+    If present, the PBC must share the dimensions of
+    the trajectory data, except for the second last,
+    which is the number of coordinates in the trajectory
+    and the dimensionality in the PBC.
+    
+    Transformations that scale or rotate the coordinates
+    are also applied to the PBC. Translations are only
+    applied to coordinates.
+    
+    The class implements several properties for useful
+    transformations, namely to box coordinates and to
+    angles. Both of these are reversible.
+    
+    The class implements several operations on the 
+    coordinates using the PBC, including putting all
+    coordinates inside the base unit cell at the origin
+    or around the origin, and putting all coordinates
+    in a compact representation.
+    '''
+    _attributes = (
+        'pbc' # [..., 3, 3] lattice matrices
+    )
+    
+    def __new__(cls, *args, pbc=None, **kwargs):
+        coordinates = np.array(*args, **kwargs).view(cls)
+        coordinates.pbc = pbc
+        return coordinates
         
-        return xtc
+    def _pbcfunc(self, other, operation):
+        out = getattr(super(), operation)(other)
+        out.__array_finalize__(self)
+        if self.pbc is not None:
+            out.pbc = getattr(self.pbc, operation)(other)
+        return out
+        
+    def _pbcifunc(self, other, operation):
+        getattr(super(), operation)(other)
+        if self.pbc is not None:
+            getattr(self.pbc, operation)(other)
+        return self
+        
+    def __matmul__(self, other):
+        return self._pbcfunc(other, '__matmul__')
+    
+    def __mul__(self, other):
+        return self._pbcfunc(other, '__mul__')
+    
+    def __div__(self, other):
+        return self._pbcfunc(other, '__div__')
+    
+    def __imul__(self, other):
+        return self._pbcifunc(other, '__imul__')
+    
+    def __idiv__(self, other):
+        return self._pbcifunc(other, '__imul__')
+    
+    @property
+    def X(self):
+        '''Return bare coordinates'''
+        return self.view(np.ndarray)
+    
+    @property
+    def I(self):
+        '''Return box coordinates and inverse of lattice'''
+        if self.pbc is None:
+            return None
+        inv = np.linalg.inv(self.pbc)
+        # This sets the pbc to identity
+        out = self @ inv
+        #out.__array_finalize__(self)
+        # We reset the pbc with the inverse to allow
+        # the reverse operation.
+        out.pbc = inv
+        return out
+    
+    @property
+    def A(self):
+        '''Return coordinates as box angles'''
+        if self.pbc is None:
+            return None
+        inv = np.linalg.inv(self.pbc) * (2 * np.pi)
+        # This sets the pbc to 2\pi \times identity
+        out = self @ inv
+        #out.__array_finalize__(self)
+        # We reset the pbc with the inverse to allow
+        # the reverse operation with the .C property
+        # (It will work with .I, but that does not set
+        # the pbc correct afterwards)
+        out.pbc = inv
+        return out
+    
+    @property
+    def C(self):
+        '''Return Cartesian coordinates from box angles'''
+        if self.pbc is None:
+            return None
+        # self.pbc is 2\pi L^-1, inverse is L / 2\pi 
+        out = self.I
+        out.pbc *= (2 * np.pi)
+        return out
+        
+    def inbox(self):
+        '''Put all particles in triclinic unit cell'''
+        if self.pbc is None:
+            return None
+        B = self.I
+        B -= np.floor(B)
+        return B.I
+    
+    def originbox(self):
+        '''Put all particles in triclinic unit cell around the origin'''
+        B = self.I
+        B -= np.floor(B + 0.5)
+        return B.I
+    
+    def hexagonal(self):
+        '''
+        This routine puts the atoms in a compact,  
+        hexagonal representation around the origin.
+        '''
+        B = self.I.reshape((-1, 3))
+        # Shift origin to middle of box
+        B += 0.5
+        B -= np.floor(B)
+        x, y = B[:, :2].X.T
+        check = (y < 0.5 - x) | (y > 1.5 - x)
+        up = y > x
+        halfx = 0.5 * x
+        twox = 2 * x
+        B[check &  up & (y > 1.25 - halfx), 1] -= 1
+        B[check & ~up & (y < 0.25 - halfx), 1] += 1
+        B[check &  up & (y < 0.5 - twox), 0] += 1
+        B[check & ~up & (y > 2.5 - twox), 0] -= 1
+        # Shift middle of hexagon to origin and transform
+        B -= 0.5
+        return B.reshape(self.shape).I
+    
+    def dodecahedral(self):
+        # Easiest is to have a square base.
+        # If the base is hexagonal, rotate,
+        # do the stuff and rotate back.
+        # No one will notice.
+        ...
 
 
+
+class Trajectory(MultiArray):
+    def __init__(self, coordinates: np.ndarray, pbc=None, velocities=None, forces=None):
+        self._members = ('coordinates', 'pbc', 'velocities', 'forces')
+        for m in self_members:
+            setattr(self, m, locals()[m])
+        # Filter _members to only include non-Null to make sure operations work.
+        self._members = tuple(m for m in self._members if getattr(self, m) is not None)
+
+    @property
+    def X(self):
+        return self.coordinates
+    
+    @property
+    def V(self):
+        return self.velocities
+    
+    @property
+    def F(self):
+        return self.forces
+    
+    @property
+    def B(self):
+        return self.pbc
+    
+    @property
+    def I(self):
+        '''Return box coordinates and inverse of lattice'''
+        if self.pbc is None:
+            return None
+        inv = np.linalg.inv(self.pbc)
+        # This sets the pbc to identity
+        out = self @ inv
+        # We reset the pbc with the inverse to allow
+        # the reverse operation.
+        out.pbc = inv
+        return out
+       
+    
