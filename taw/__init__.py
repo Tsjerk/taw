@@ -1,3 +1,3 @@
-from .ArrayPlus import PBC, CoordinatesMaybeWithPBC
-from .Trajectory import Atoms, Trajectory
+from .MultiArray import MultiArray
+from .Trajectory import Trajectory, PBC, PositionArray, VectorArray
 

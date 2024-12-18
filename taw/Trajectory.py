@@ -13,7 +13,7 @@ class NDArrayWithAttributes(np.ndarray):
     _attributes = ()
 
     def __new__(cls, *args, **kwargs):
-        return np.ndarray(*args, **kwargs).view(cls)
+        return np.array(*args, **kwargs).view(cls)
     
     def __array_finalize__(self, obj):
         if obj is None:
@@ -25,7 +25,7 @@ class NDArrayWithAttributes(np.ndarray):
 class PositionArray(np.ndarray):
     '''This is an alias for the regular np.ndarray'''
     def __new__(cls, *args, **kwargs):
-        return np.ndarray(*args, **kwargs).view(cls)
+        return np.array(*args, **kwargs).view(cls)
 
 
 class VectorArray(np.ndarray):
@@ -34,7 +34,7 @@ class VectorArray(np.ndarray):
     preserving the original data.'''
 
     def __new__(cls, *args, **kwargs):
-        return np.ndarray(*args, **kwargs).view(cls)
+        return np.array(*args, **kwargs).view(cls)
 
     def __add__(self, other):
         '''Return a copy of the VectorArray.
@@ -348,10 +348,12 @@ class CoordinatesMaybeWithPBC(NDArrayWithAttributes):
 
 
 class Trajectory(MultiArray):
-    def __init__(self, coordinates: np.ndarray, pbc=None, velocities=None, forces=None):
+    def __init__(self, coordinates, pbc=None, velocities=None, forces=None):
         self._members = ('coordinates', 'pbc', 'velocities', 'forces')
-        for m in self_members:
-            setattr(self, m, locals()[m])
+        self._types = (PositionArray, VectorArray, VectorArray, VectorArray)
+        for m, t in zip(self_members, self._types):
+            argument = locals()[m]
+            setattr(self, m, argument.view(t) if argument is not None else None)
         # Filter _members to only include non-Null to make sure operations work.
         self._members = tuple(m for m in self._members if getattr(self, m) is not None)
 
