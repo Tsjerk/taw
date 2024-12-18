@@ -107,7 +107,7 @@ class PBC(VectorArray):
         return pbc.view(cls)
         
     @classmethod
-    def dim2pbc(self, arr: np.ndarray) -> np.ndarray:
+    def dim2pbc(cls, arr: np.ndarray) -> np.ndarray:
         '''
         Convert unit cell definition from PDB CRYST1 format to lattice definition.
         '''
@@ -125,7 +125,7 @@ class PBC(VectorArray):
         pbc[:, 7] = lengths[:, 2] * (cosa[:, 0] - cosa[:, 1] * cosa[:, 2]) / sing
         pbc[:, 8] = (lengths[:, 2] ** 2 - (pbc[:, 6:8] ** 2).sum(axis=1)) ** 0.5
 
-        return pbc.reshape((*arr.shape[:-1], 3, 3)).view(self.__class__)
+        return pbc.view(cls).reshape((*arr.shape[:-1], 3, 3)) 
     
     def reduce(self):
         '''Perform lattice reduction'''
