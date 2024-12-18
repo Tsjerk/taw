@@ -74,7 +74,7 @@ def add_distributed_operator_methods(cls):
         def methodfun(self, *args, **kwargs):
             return cls(
                 **{
-                    k: getattr(v, op)(*args, **kwargs) 
+                    k: None if v is None else getattr(v, op)(*args, **kwargs) 
                     for k, v in self._members.items()
                 }
             )
@@ -116,13 +116,18 @@ class MultiArray:
         Args:
             **kwargs: Named `ndarray` objects to be stored as members of the instance.
         """
-        self._members = kwargs
-        for k, v in self._members.items():
-            setattr(self, k, v)
+        for k, v in kwargs.items():
+            super().__setattr__(k, v)
+        self._members = { k: getattr(self, k) for k in kwargs }
 
     def __repr__(self):
         s = ['MultiArray:']
         for k, v in self._members.items():
             s.append(f'{k} ({type(v)}) =\n{v}')
         return '\n'.join(s)
+    
+    def __setattr__(self, attr, stuff):
+        super().__setattr__(attr, stuff)
+        if attr in self._members.keys():
+            self._members[attr] = getattr(self, attr)
     

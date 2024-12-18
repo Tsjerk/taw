@@ -349,13 +349,15 @@ class CoordinatesMaybeWithPBC(NDArrayWithAttributes):
 
 class Trajectory(MultiArray):
     def __init__(self, coordinates, pbc=None, velocities=None, forces=None):
-        self._members = ('coordinates', 'pbc', 'velocities', 'forces')
-        self._types = (PositionArray, VectorArray, VectorArray, VectorArray)
-        for m, t in zip(self_members, self._types):
+        self._members = {
+            'coordinates': PositionArray, 
+            'pbc': VectorArray, 
+            'velocities': VectorArray, 
+            'forces': VectorArray
+        }
+        for m, t in self._members.items():
             argument = locals()[m]
             setattr(self, m, argument.view(t) if argument is not None else None)
-        # Filter _members to only include non-Null to make sure operations work.
-        self._members = tuple(m for m in self._members if getattr(self, m) is not None)
 
     @property
     def X(self):
@@ -379,11 +381,12 @@ class Trajectory(MultiArray):
         if self.pbc is None:
             return None
         inv = np.linalg.inv(self.pbc)
+        print(inv[0])
         # This sets the pbc to identity
         out = self @ inv
         # We reset the pbc with the inverse to allow
         # the reverse operation.
-        out.pbc = inv
+        setattr(out, 'pbc', inv)
         return out
        
     
