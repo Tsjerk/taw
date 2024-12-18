@@ -72,7 +72,7 @@ def add_distributed_operator_methods(cls):
                       returns a new instance with the results.
         """
         def methodfun(self, *args, **kwargs):
-            return cls(
+            return self.__class__(
                 **{
                     k: None if v is None else getattr(v, op)(*args, **kwargs) 
                     for k, v in self._members.items()
