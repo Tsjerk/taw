@@ -119,3 +119,10 @@ class MultiArray:
         self._members = kwargs
         for k, v in self._members.items():
             setattr(self, k, v)
+
+    def __repr__(self):
+        s = ['MultiArray:']
+        for k, v in self._members.items():
+            s.append(f'{k} ({type(v)}) =\n{v}')
+        return '\n'.join(s)
+    
